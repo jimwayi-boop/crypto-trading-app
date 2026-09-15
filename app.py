@@ -15,7 +15,7 @@ mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
 
 @st.cache_data(ttl=300)
 def fetch_ohlcv(symbol, timeframe, limit=500):
-    exchange = ccxt.bitmart({'enableRateLimit': True})
+    exchange = ccxt.bullish({'enableRateLimit': True})
     data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
