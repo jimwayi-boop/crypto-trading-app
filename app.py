@@ -67,3 +67,8 @@ elif mode == "纸面交易":
         st.session_state.virtual_balance = capital
         st.session_state.virtual_position = 0
         st.success("已重置")
+
+exchange = ccxt.bullish({'enableRateLimit': True})
+exchange.load_markets()
+st.write("支持的 timeframes:", exchange.timeframes)
+st.write("支持的符号示例:", list(exchange.markets.keys())[:10])
