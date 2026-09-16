@@ -8,7 +8,7 @@ st.set_page_config(page_title="Crypto Trading App", layout="wide")
 st.title("📈 Crypto 交易应用")
 
 st.sidebar.header("设置")
-symbol = st.sidebar.selectbox("交易对", ["BTC/USDC", "ETH/USDC", "SOL/USDC"])
+symbol = st.sidebar.selectbox("交易对", ["BTCUSDC", "ETHUSDC", "SOLUSDC"])
 timeframe = st.sidebar.selectbox("K线周期", ["1h", "4h", "1d"])
 capital = st.sidebar.number_input("初始资金 ($)", value=500)
 mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
@@ -16,8 +16,7 @@ mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
 @st.cache_data(ttl=300)
 def fetch_ohlcv(symbol, timeframe, limit=500):
     exchange = ccxt.bullish({'enableRateLimit': True})
-    # 显式使用 Bullish 原生符号格式，或让 CCXT 自动转换
-    # 这里直接使用 CCXT 统一格式，但在部署到 Python 3.12 后应能正常工作
+    exchange.load_markets()  # 先加载市场信息，CCXT 才能正确映射符号
     data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
