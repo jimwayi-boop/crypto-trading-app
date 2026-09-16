@@ -14,12 +14,22 @@ capital = st.sidebar.number_input("初始资金 ($)", value=500)
 mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
 
 @st.cache_data(ttl=300)
-def fetch_ohlcv(symbol, timeframe, limit=100):
+def fetch_ohlcv(symbol, timeframe, limit=500):
     exchange = ccxt.bullish({'enableRateLimit': True})
-    data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+    exchange.load_markets()
+    data = exchange.fetch_ohlcv(symbol, '1h', limit=limit)
     df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df.set_index('timestamp', inplace=True)
+    if timeframe == '4h':
+        df = df.resample('4h').agg({
+            'open': 'first',
+            'high': 'max',
+            'low': 'min',
+            'close': 'last',
+            'volume': 'sum'
+        }).dropna()
+
     return df
 
 df = fetch_ohlcv(symbol, timeframe)
