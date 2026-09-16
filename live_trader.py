@@ -9,7 +9,7 @@ ACCOUNT_ID = os.environ.get("BULLISH_ACCOUNT_ID", "")
 
 client = BullishClient(API_KEY, SECRET_KEY, ACCOUNT_ID)
 
-def execute_live_trade(symbol="BTC/USDC", timeframe="4h"):
+def execute_live_trade(symbol="BTCUSDC", timeframe="4h"):
     ohlcv = client.fetch_ohlcv(symbol, timeframe, limit=200)
     df = pd.DataFrame(ohlcv, columns=['timestamp','open','high','low','close','volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')

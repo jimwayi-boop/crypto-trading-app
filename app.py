@@ -14,9 +14,8 @@ capital = st.sidebar.number_input("初始资金 ($)", value=500)
 mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
 
 @st.cache_data(ttl=300)
-def fetch_ohlcv(symbol, timeframe, limit=500):
+def fetch_ohlcv(symbol, timeframe, limit=100):
     exchange = ccxt.bullish({'enableRateLimit': True})
-    exchange.load_markets()  # 先加载市场信息，CCXT 才能正确映射符号
     data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
@@ -67,8 +66,3 @@ elif mode == "纸面交易":
         st.session_state.virtual_balance = capital
         st.session_state.virtual_position = 0
         st.success("已重置")
-
-exchange = ccxt.bullish({'enableRateLimit': True})
-exchange.load_markets()
-st.write("支持的 timeframes:", exchange.timeframes)
-st.write("支持的符号示例:", list(exchange.markets.keys())[:10])
