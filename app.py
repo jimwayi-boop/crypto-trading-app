@@ -16,6 +16,8 @@ mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
 @st.cache_data(ttl=300)
 def fetch_ohlcv(symbol, timeframe, limit=500):
     exchange = ccxt.bullish({'enableRateLimit': True})
+    # 显式使用 Bullish 原生符号格式，或让 CCXT 自动转换
+    # 这里直接使用 CCXT 统一格式，但在部署到 Python 3.12 后应能正常工作
     data = exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
     df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
