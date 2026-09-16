@@ -8,7 +8,7 @@ st.set_page_config(page_title="Crypto Trading App", layout="wide")
 st.title("📈 Crypto 交易应用")
 
 st.sidebar.header("设置")
-symbol = st.sidebar.selectbox("交易对", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+symbol = st.sidebar.selectbox("交易对", ["BTC/USDC", "ETH/USDC", "SOL/USDC"])
 timeframe = st.sidebar.selectbox("K线周期", ["1h", "4h", "1d"])
 capital = st.sidebar.number_input("初始资金 ($)", value=500)
 mode = st.sidebar.radio("模式", ["回测", "纸面交易"])
@@ -40,7 +40,6 @@ elif mode == "纸面交易":
     if 'virtual_balance' not in st.session_state:
         st.session_state.virtual_balance = capital
         st.session_state.virtual_position = 0
-        st.session_state.virtual_trades = []
 
     col1, col2 = st.columns(2)
     col1.metric("虚拟余额", f"${st.session_state.virtual_balance:.2f}")
