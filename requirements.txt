@@ -1,5 +1,5 @@
+ccxt==4.5.61
 streamlit
 pandas
 numpy
-ccxt
 requests
