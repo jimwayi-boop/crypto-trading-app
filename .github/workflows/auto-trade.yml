@@ -1,15 +1,15 @@
 name: Auto Trade
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 */2 * * *'
   workflow_dispatch:
 
 jobs:
   trade:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Install deps
@@ -19,4 +19,7 @@ jobs:
           BULLISH_API_KEY: ${{ secrets.BULLISH_API_KEY }}
           BULLISH_SECRET_KEY: ${{ secrets.BULLISH_SECRET_KEY }}
           BULLISH_ACCOUNT_ID: ${{ secrets.BULLISH_ACCOUNT_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: python live_trader.py
