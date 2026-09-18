@@ -1,141 +1,101 @@
 """
 多源新闻情绪 + 技术指标复合策略
-整合 Free Crypto News API / CryptoCompare / CoinGecko / RSS 四个新闻源
+使用免费新闻源：CoinStats API + 多个 RSS 源
 """
 
-import os
 import re
 import requests
 import pandas as pd
 import numpy as np
 import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
 class NewsAggregator:
-    """从多个来源抓取加密货币新闻，归一化为统一格式"""
+    """从多个免费来源抓取加密货币新闻，归一化为统一格式"""
 
     RSS_FEEDS = {
-        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "CoinTelegraph": "https://cointelegraph.com/rss",
+        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "Decrypt": "https://decrypt.co/feed",
+        "BitcoinMagazine": "https://bitcoinmagazine.com/.rss/full/",
+        "CryptoSlate": "https://cryptoslate.com/feed/",
     }
 
-    def __init__(self, lookback_hours=2, max_per_source=20):
+    def __init__(self, lookback_hours=6, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
 
     # ---------- 工具函数 ----------
     @staticmethod
-    def _parse_time(time_str):
+    def _now_utc():
+        return datetime.now(timezone.utc).replace(tzinfo=None)
+
+    def _parse_time(self, time_str):
         """尝试多种格式解析时间字符串"""
         if not time_str:
-            return datetime.utcnow()
+            return self._now_utc()
         formats = [
             "%Y-%m-%dT%H:%M:%S%z",
             "%Y-%m-%dT%H:%M:%SZ",
             "%Y-%m-%dT%H:%M:%S",
+            "%Y-%m-%d %H:%M:%S",
             "%a, %d %b %Y %H:%M:%S %z",
             "%a, %d %b %Y %H:%M:%S %Z",
+            "%a, %d %b %Y %H:%M:%S",
         ]
         for fmt in formats:
             try:
                 dt = datetime.strptime(time_str.strip(), fmt)
                 if dt.tzinfo is not None:
-                    dt = dt.astimezone(tz=None).replace(tzinfo=None)
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
                 return dt
             except Exception:
                 continue
-        return datetime.utcnow()
+        return self._now_utc()
 
     def _is_recent(self, dt):
         """检查新闻是否在回看窗口内"""
-        return dt >= datetime.utcnow() - timedelta(hours=self.lookback_hours)
+        return dt >= self._now_utc() - timedelta(hours=self.lookback_hours)
 
-    # ---------- 源1: Free Crypto News API ----------
-    def fetch_free_crypto_news(self, symbol):
-        base = symbol.replace("USDC", "").replace("USDT", "").upper()
-        url = f"https://cryptocurrency.cv/api/{base.lower()}"
+    # ---------- 源1: CoinStats API ----------
+    def fetch_coinstats(self, symbol):
+        """从 CoinStats API 获取免费新闻"""
+        url = "https://api.coinstats.app/public/v1/news"
         try:
-            resp = requests.get(url, timeout=15)
+            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
             data = resp.json()
-            articles = data if isinstance(data, list) else data.get("articles", data.get("data", []))
+            articles = data.get("news", [])
             results = []
             for item in articles[: self.max_per_source]:
                 title = item.get("title", "")
-                pub = self._parse_time(item.get("published_at", item.get("pubDate", "")))
+                pub = self._parse_time(item.get("feedDate", ""))
                 if title and self._is_recent(pub):
                     results.append({
                         "title": title,
-                        "source": "FreeCryptoNews",
+                        "source": "CoinStats",
                         "published": pub,
-                        "url": item.get("url", item.get("link", "")),
+                        "url": item.get("link", ""),
                     })
-            print(f"    [FreeCryptoNews] {len(results)} 条")
+            print(f"    [CoinStats] {len(results)} 条")
             return results
         except Exception as e:
-            print(f"    [FreeCryptoNews] 失败: {e}")
+            print(f"    [CoinStats] 失败: {e}")
             return []
 
-    # ---------- 源2: CryptoCompare News ----------
-    def fetch_cryptocompare(self, symbol):
-        base = symbol.replace("USDC", "").replace("USDT", "").upper()
-        url = "https://min-api.cryptocompare.com/data/v2/news/"
-        params = {"lang": "EN", "categories": base}
-        try:
-            resp = requests.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            results = []
-            for item in data.get("Data", [])[: self.max_per_source]:
-                title = item.get("title", "")
-                pub = self._parse_time(item.get("published_on", ""))
-                if title and self._is_recent(pub):
-                    results.append({
-                        "title": title,
-                        "source": "CryptoCompare",
-                        "published": pub,
-                        "url": item.get("url", ""),
-                    })
-            print(f"    [CryptoCompare] {len(results)} 条")
-            return results
-        except Exception as e:
-            print(f"    [CryptoCompare] 失败: {e}")
-            return []
-
-    # ---------- 源3: CoinGecko News ----------
-    def fetch_coingecko(self, symbol):
-        url = "https://api.coingecko.com/api/v3/news"
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            articles = data if isinstance(data, list) else data.get("data", [])
-            results = []
-            for item in articles[: self.max_per_source]:
-                title = item.get("title", "")
-                pub = self._parse_time(item.get("created_at", item.get("updated_at", "")))
-                if title and self._is_recent(pub):
-                    results.append({
-                        "title": title,
-                        "source": "CoinGecko",
-                        "published": pub,
-                        "url": item.get("url", ""),
-                    })
-            print(f"    [CoinGecko] {len(results)} 条")
-            return results
-        except Exception as e:
-            print(f"    [CoinGecko] 失败: {e}")
-            return []
-
-    # ---------- 源4: RSS Feeds ----------
+    # ---------- 源2-6: RSS 源 ----------
     def fetch_rss(self, symbol):
-        base = symbol.replace("USDC", "").replace("USDT", "").upper()
+        """从多个 RSS 源获取新闻"""
         results = []
         for name, feed_url in self.RSS_FEEDS.items():
             try:
-                resp = requests.get(feed_url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+                resp = requests.get(
+                    feed_url,
+                    timeout=15,
+                    headers={"User-Agent": "Mozilla/5.0 (compatible; CryptoBot/1.0)"}
+                )
                 resp.raise_for_status()
                 root = ET.fromstring(resp.content)
                 items = root.findall(".//item")
@@ -165,14 +125,12 @@ class NewsAggregator:
     # ---------- 聚合入口 ----------
     def aggregate(self, symbol):
         """从所有源抓取新闻，去重后返回统一列表"""
-        print(f"  📡 从 5 个来源抓取 {symbol} 新闻...")
+        print(f"  📡 从多个来源抓取 {symbol} 新闻...")
         all_news = []
-        all_news.extend(self.fetch_free_crypto_news(symbol))
-        all_news.extend(self.fetch_cryptocompare(symbol))
-        all_news.extend(self.fetch_coingecko(symbol))
+        all_news.extend(self.fetch_coinstats(symbol))
         all_news.extend(self.fetch_rss(symbol))
 
-        # 按标题去重（简单版本：标题小写后前50字符相同则视为重复）
+        # 按标题去重
         seen = set()
         unique_news = []
         for news in all_news:
@@ -195,8 +153,8 @@ class NewsSentimentStrategy:
                  slow_ema=50,
                  lookback=20,
                  sentiment_threshold=0.3,
-                 news_lookback_hours=2,
-                 max_news_per_source=20):
+                 news_lookback_hours=6,
+                 max_news_per_source=30):
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
         self.lookback = lookback
