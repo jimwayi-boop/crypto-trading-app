@@ -1,6 +1,6 @@
 """
-多源新闻情绪 + 技术指标复合策略
-使用免费新闻源：cryptocurrency.cv API + 多个 RSS 源
+多源新闻情绪 + Polymarket预测市场 + 技术指标复合策略
+使用免费新闻源：cryptocurrency.cv API + 多个RSS源 + Polymarket Gamma API
 """
 
 import re
@@ -26,9 +26,11 @@ class NewsAggregator:
         "CoinGape": "https://coingape.com/feed/",
         "BeInCrypto": "https://beincrypto.com/feed/",
         "AMBCrypto": "https://ambcrypto.com/feed/",
+        "TheDefiant": "https://thedefiant.io/feed/",
+        "CryptoBriefing": "https://cryptobriefing.com/feed/",
     }
 
-    def __init__(self, lookback_hours=48, max_per_source=30):
+    def __init__(self, lookback_hours=72, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
 
@@ -72,6 +74,7 @@ class NewsAggregator:
         endpoints = [
             ("https://cryptocurrency.cv/api/news", {"limit": self.max_per_source}),
             ("https://cryptocurrency.cv/api/articles", {"limit": self.max_per_source}),
+            ("https://cryptocurrency.cv/api/bitcoin", {"limit": self.max_per_source}),
         ]
         for url, params in endpoints:
             try:
@@ -101,7 +104,7 @@ class NewsAggregator:
         print(f"    [cryptocurrency.cv] {len(results)} 条")
         return results
 
-    # ---------- 源2-11: RSS 源 ----------
+    # ---------- 源2-13: RSS 源 ----------
     def fetch_rss(self, symbol):
         """从多个 RSS 源获取新闻"""
         results = []
@@ -185,9 +188,63 @@ class NewsAggregator:
         return unique_news
 
 
+class PolymarketSentiment:
+    """从 Polymarket 获取预测市场数据，转换为情绪分"""
+
+    def __init__(self, timeout=15):
+        self.gamma_url = "https://gamma-api.polymarket.com"
+        self.timeout = timeout
+
+    def fetch_crypto_market_sentiment(self, symbol="BTC"):
+        """获取与加密货币相关的预测市场情绪"""
+        try:
+            # 获取活跃市场
+            resp = requests.get(
+                f"{self.gamma_url}/markets",
+                params={"closed": "false", "limit": 50},
+                timeout=self.timeout,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            resp.raise_for_status()
+            markets = resp.json()
+
+            scores = []
+            for market in markets:
+                question = market.get("question", "").lower()
+                # 过滤与 BTC/Bitcoin 相关的市场
+                if symbol.lower() in question or "bitcoin" in question:
+                    # 获取市场当前价格（概率）
+                    # Polymarket 市场中，价格 0-1 代表概率
+                    price = market.get("lastTradePrice") or market.get("bestBid") or market.get("bestAsk")
+                    if price is not None:
+                        try:
+                            prob = float(price)
+                            # 将概率转换为情绪分
+                            if prob > 0.6:
+                                scores.append(0.5)
+                            elif prob < 0.4:
+                                scores.append(-0.5)
+                            else:
+                                scores.append(0.0)
+                        except (ValueError, TypeError):
+                            continue
+
+            if scores:
+                avg = float(np.mean(scores))
+                print(f"    [Polymarket] 分析 {len(scores)} 个相关市场，情绪分: {avg:+.3f}")
+                return avg
+            else:
+                print("    [Polymarket] 未找到相关市场")
+                return 0.0
+
+        except Exception as e:
+            print(f"    [Polymarket] 失败: {str(e)[:80]}")
+            return 0.0
+
+
 class NewsSentimentStrategy:
     """
-    多源新闻情绪 + 技术指标复合策略
+    多源新闻情绪 + Polymarket预测市场 + 技术指标复合策略
     """
 
     def __init__(self,
@@ -195,8 +252,9 @@ class NewsSentimentStrategy:
                  slow_ema=50,
                  lookback=20,
                  sentiment_threshold=0.3,
-                 news_lookback_hours=48,
-                 max_news_per_source=30):
+                 news_lookback_hours=72,
+                 max_news_per_source=30,
+                 polymarket_weight=0.3):
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
         self.lookback = lookback
@@ -206,8 +264,10 @@ class NewsSentimentStrategy:
             max_per_source=max_news_per_source,
         )
         self.analyzer = SentimentIntensityAnalyzer()
+        self.polymarket = PolymarketSentiment()
+        self.polymarket_weight = polymarket_weight  # Polymarket 情绪在综合分中的权重
 
-    def analyze_sentiment(self, news_list):
+    def analyze_news_sentiment(self, news_list):
         """对新闻标题做 VADER 情绪打分"""
         if not news_list:
             return 0.0, 0, 0, 0
@@ -228,7 +288,7 @@ class NewsSentimentStrategy:
         if not scores:
             return 0.0, 0, 0, 0
         avg = float(np.mean(scores))
-        print(f"  🧠 情绪: 平均 {avg:+.3f} | 正面 {positive} 负面 {negative} 中性 {neutral}")
+        print(f"  🧠 新闻情绪: 平均 {avg:+.3f} | 正面 {positive} 负面 {negative} 中性 {neutral}")
         return avg, positive, negative, neutral
 
     def compute_technical(self, df):
@@ -242,8 +302,22 @@ class NewsSentimentStrategy:
         df = self.compute_technical(df)
         df["signal"] = 0
 
+        # 新闻情绪
         news_list = self.aggregator.aggregate(symbol)
-        sentiment_score, pos, neg, neu = self.analyze_sentiment(news_list)
+        news_sentiment, pos, neg, neu = self.analyze_news_sentiment(news_list)
+
+        # Polymarket 情绪
+        polymarket_sentiment = self.polymarket.fetch_crypto_market_sentiment(
+            symbol.replace("USDC", "").replace("USDT", "")
+        )
+
+        # 综合情绪分（加权平均）
+        combined_sentiment = (
+            (1 - self.polymarket_weight) * news_sentiment
+            + self.polymarket_weight * polymarket_sentiment
+        )
+        print(f"  🎯 综合情绪分: {combined_sentiment:+.3f} "
+              f"(新闻 {news_sentiment:+.3f}, Polymarket {polymarket_sentiment:+.3f})")
 
         latest = df.iloc[-1]
         tech_buy = (
@@ -258,21 +332,21 @@ class NewsSentimentStrategy:
         signal = 0
         reason = "无信号"
 
-        if tech_buy and sentiment_score >= self.sentiment_threshold:
+        if tech_buy and combined_sentiment >= self.sentiment_threshold:
             signal = 1
-            reason = f"技术突破 + 情绪积极 ({sentiment_score:+.2f})"
-        elif tech_sell and sentiment_score <= -self.sentiment_threshold:
+            reason = f"技术突破 + 情绪积极 ({combined_sentiment:+.2f})"
+        elif tech_sell and combined_sentiment <= -self.sentiment_threshold:
             signal = -1
-            reason = f"技术走弱 + 情绪消极 ({sentiment_score:+.2f})"
-        elif sentiment_score >= 0.7:
+            reason = f"技术走弱 + 情绪消极 ({combined_sentiment:+.2f})"
+        elif combined_sentiment >= 0.7:
             signal = 1
-            reason = f"极端积极情绪 ({sentiment_score:+.2f})"
-        elif sentiment_score <= -0.7:
+            reason = f"极端积极情绪 ({combined_sentiment:+.2f})"
+        elif combined_sentiment <= -0.7:
             signal = -1
-            reason = f"极端消极情绪 ({sentiment_score:+.2f})"
+            reason = f"极端消极情绪 ({combined_sentiment:+.2f})"
 
         df.loc[df.index[-1], "signal"] = signal
         print(f"  📊 技术: EMA{'↑' if latest['ema_fast'] > latest['ema_slow'] else '↓'} "
               f"| 收盘 {latest['close']:.2f} | 突破位 {latest['high_roll']:.2f}")
         print(f"  🎯 信号: {signal} | 原因: {reason}")
-        return df, sentiment_score, reason
+        return df, combined_sentiment, reason
