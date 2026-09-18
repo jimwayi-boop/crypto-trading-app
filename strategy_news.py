@@ -17,16 +17,18 @@ class NewsAggregator:
 
     RSS_FEEDS = {
         "CoinTelegraph": "https://cointelegraph.com/rss",
-        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
+        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml",
         "Decrypt": "https://decrypt.co/feed",
         "BitcoinMagazine": "https://bitcoinmagazine.com/feed",
         "CryptoSlate": "https://cryptoslate.com/feed/",
         "CryptoPotato": "https://cryptopotato.com/feed/",
         "NewsBTC": "https://www.newsbtc.com/feed/",
+        "Bitcoinist": "https://bitcoinist.com/feed/",
+        "CryptoNews": "https://cryptonews.com/news/feed/",
         "TheBlock": "https://www.theblock.co/rss.xml",
     }
 
-    def __init__(self, lookback_hours=24, max_per_source=30):
+    def __init__(self, lookback_hours=12, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
 
@@ -36,7 +38,7 @@ class NewsAggregator:
         return datetime.now(timezone.utc).replace(tzinfo=None)
 
     def _parse_time(self, time_str):
-        """尝试多种格式解析时间字符串"""
+        """尝试多种格式解析时间字符串，统一转为 UTC naive datetime"""
         if not time_str:
             return self._now_utc()
         formats = [
@@ -76,14 +78,14 @@ class NewsAggregator:
             results = []
             for item in articles[: self.max_per_source]:
                 title = item.get("title", "")
-                pub_str = item.get("pubDate", item.get("published_at", ""))
+                pub_str = item.get("pubDate", "")
                 pub = self._parse_time(pub_str)
                 if title and self._is_recent(pub):
                     results.append({
                         "title": title,
                         "source": item.get("source", "cryptocurrency.cv"),
                         "published": pub,
-                        "url": item.get("link", item.get("url", "")),
+                        "url": item.get("link", ""),
                     })
             print(f"    [cryptocurrency.cv] {len(results)} 条")
             return results
@@ -91,7 +93,7 @@ class NewsAggregator:
             print(f"    [cryptocurrency.cv] 失败: {e}")
             return []
 
-    # ---------- 源2-9: RSS 源 ----------
+    # ---------- 源2-11: RSS 源 ----------
     def fetch_rss(self, symbol):
         """从多个 RSS 源获取新闻"""
         results = []
@@ -159,7 +161,7 @@ class NewsSentimentStrategy:
                  slow_ema=50,
                  lookback=20,
                  sentiment_threshold=0.3,
-                 news_lookback_hours=24,
+                 news_lookback_hours=12,
                  max_news_per_source=30):
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
