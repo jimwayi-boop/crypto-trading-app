@@ -1,6 +1,6 @@
 """
 多源新闻情绪 + 技术指标复合策略
-使用免费新闻源：CoinStats API + 多个 RSS 源
+使用免费新闻源：cryptocurrency.cv API + 多个 RSS 源
 """
 
 import re
@@ -19,11 +19,14 @@ class NewsAggregator:
         "CoinTelegraph": "https://cointelegraph.com/rss",
         "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
         "Decrypt": "https://decrypt.co/feed",
-        "BitcoinMagazine": "https://bitcoinmagazine.com/.rss/full/",
+        "BitcoinMagazine": "https://bitcoinmagazine.com/feed",
         "CryptoSlate": "https://cryptoslate.com/feed/",
+        "CryptoPotato": "https://cryptopotato.com/feed/",
+        "NewsBTC": "https://www.newsbtc.com/feed/",
+        "TheBlock": "https://www.theblock.co/rss.xml",
     }
 
-    def __init__(self, lookback_hours=6, max_per_source=30):
+    def __init__(self, lookback_hours=24, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
 
@@ -59,33 +62,36 @@ class NewsAggregator:
         """检查新闻是否在回看窗口内"""
         return dt >= self._now_utc() - timedelta(hours=self.lookback_hours)
 
-    # ---------- 源1: CoinStats API ----------
-    def fetch_coinstats(self, symbol):
-        """从 CoinStats API 获取免费新闻"""
-        url = "https://api.coinstats.app/public/v1/news"
+    # ---------- 源1: cryptocurrency.cv API ----------
+    def fetch_crypto_cv(self, symbol):
+        """从 cryptocurrency.cv 获取新闻（免费，无需API Key）"""
         try:
-            resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+            url = "https://cryptocurrency.cv/api/news"
+            params = {"limit": self.max_per_source}
+            resp = requests.get(url, params=params, timeout=15,
+                                headers={"User-Agent": "Mozilla/5.0"})
             resp.raise_for_status()
             data = resp.json()
-            articles = data.get("news", [])
+            articles = data.get("articles", [])
             results = []
             for item in articles[: self.max_per_source]:
                 title = item.get("title", "")
-                pub = self._parse_time(item.get("feedDate", ""))
+                pub_str = item.get("pubDate", item.get("published_at", ""))
+                pub = self._parse_time(pub_str)
                 if title and self._is_recent(pub):
                     results.append({
                         "title": title,
-                        "source": "CoinStats",
+                        "source": item.get("source", "cryptocurrency.cv"),
                         "published": pub,
-                        "url": item.get("link", ""),
+                        "url": item.get("link", item.get("url", "")),
                     })
-            print(f"    [CoinStats] {len(results)} 条")
+            print(f"    [cryptocurrency.cv] {len(results)} 条")
             return results
         except Exception as e:
-            print(f"    [CoinStats] 失败: {e}")
+            print(f"    [cryptocurrency.cv] 失败: {e}")
             return []
 
-    # ---------- 源2-6: RSS 源 ----------
+    # ---------- 源2-9: RSS 源 ----------
     def fetch_rss(self, symbol):
         """从多个 RSS 源获取新闻"""
         results = []
@@ -127,7 +133,7 @@ class NewsAggregator:
         """从所有源抓取新闻，去重后返回统一列表"""
         print(f"  📡 从多个来源抓取 {symbol} 新闻...")
         all_news = []
-        all_news.extend(self.fetch_coinstats(symbol))
+        all_news.extend(self.fetch_crypto_cv(symbol))
         all_news.extend(self.fetch_rss(symbol))
 
         # 按标题去重
@@ -153,7 +159,7 @@ class NewsSentimentStrategy:
                  slow_ema=50,
                  lookback=20,
                  sentiment_threshold=0.3,
-                 news_lookback_hours=6,
+                 news_lookback_hours=24,
                  max_news_per_source=30):
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
