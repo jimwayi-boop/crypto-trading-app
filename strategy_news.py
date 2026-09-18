@@ -1,11 +1,8 @@
 """
 多源新闻情绪 + 技术指标复合策略
-主数据源: NewsAPI.org (需 API Key)
-补充数据源: cryptocurrency.cv, CoinGecko, CryptoControl
-保留源: 多个 RSS feed
+数据源: cryptocurrency.cv API + 多个 RSS 源
 """
 
-import os
 import re
 import requests
 import pandas as pd
@@ -16,9 +13,8 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 
 class NewsAggregator:
-    """从多个来源抓取加密货币新闻，归一化为统一格式"""
+    """从多个免费来源抓取加密货币新闻，归一化为统一格式"""
 
-    # 保留的 RSS 源（之前验证可用的）
     RSS_FEEDS = {
         "CoinTelegraph": "https://cointelegraph.com/rss",
         "Decrypt": "https://decrypt.co/feed",
@@ -35,9 +31,7 @@ class NewsAggregator:
     def __init__(self, lookback_hours=72, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
-        self.newsapi_key = os.environ.get("NEWSAPI_KEY", "")
 
-    # ---------- 工具函数 ----------
     @staticmethod
     def _now_utc():
         return datetime.now(timezone.utc).replace(tzinfo=None)
@@ -67,141 +61,49 @@ class NewsAggregator:
     def _is_recent(self, dt):
         return dt >= self._now_utc() - timedelta(hours=self.lookback_hours)
 
-    # ---------- 源1: NewsAPI.org（主力） ----------
-    def fetch_newsapi(self, symbol):
-        """从 NewsAPI.org 获取加密货币新闻（需要 API Key）"""
-        if not self.newsapi_key:
-            print("    [NewsAPI] 未设置 NEWSAPI_KEY，跳过")
-            return []
-        base = symbol.replace("USDC", "").replace("USDT", "").upper()
-        url = "https://newsapi.org/v2/everything"
-        params = {
-            "q": f"{base} OR bitcoin OR crypto",
-            "language": "en",
-            "sortBy": "publishedAt",
-            "pageSize": self.max_per_source,
-            "apiKey": self.newsapi_key,
-        }
-        try:
-            resp = requests.get(url, params=params, timeout=15)
-            resp.raise_for_status()
-            data = resp.json()
-            results = []
-            for item in data.get("articles", [])[: self.max_per_source]:
-                title = item.get("title", "")
-                pub = self._parse_time(item.get("publishedAt", ""))
-                if title and self._is_recent(pub):
-                    results.append({
-                        "title": title,
-                        "source": "NewsAPI",
-                        "published": pub,
-                        "url": item.get("url", ""),
-                    })
-            print(f"    [NewsAPI] {len(results)} 条")
-            return results
-        except Exception as e:
-            print(f"    [NewsAPI] 失败: {str(e)[:80]}")
-            return []
-
-    # ---------- 源2: cryptocurrency.cv（补充） ----------
+    # ---------- 源1: cryptocurrency.cv ----------
     def fetch_crypto_cv(self, symbol):
         """从 cryptocurrency.cv 获取新闻（免费，无需API Key）"""
         results = []
-        endpoints = [
-            ("https://cryptocurrency.cv/api/news", {"limit": self.max_per_source}),
-            ("https://cryptocurrency.cv/api/bitcoin", {"limit": self.max_per_source}),
-        ]
-        for url, params in endpoints:
-            try:
-                resp = requests.get(url, params=params, timeout=15,
-                                    headers={"User-Agent": "Mozilla/5.0"})
-                if resp.status_code != 200:
-                    continue
-                data = resp.json()
-                articles = data.get("articles", data.get("data", []))
-                for item in articles[: self.max_per_source]:
-                    title = item.get("title", "")
-                    pub_str = item.get("pubDate", item.get("published_at", ""))
-                    pub = self._parse_time(pub_str)
-                    if title and self._is_recent(pub):
-                        results.append({
-                            "title": title,
-                            "source": item.get("source", "cryptocurrency.cv"),
-                            "published": pub,
-                            "url": item.get("link", item.get("url", "")),
-                        })
-                if results:
-                    break
-            except Exception:
-                continue
+        url = "https://cryptocurrency.cv/api/news"
+        params = {"limit": self.max_per_source}
+        try:
+            resp = requests.get(
+                url, params=params, timeout=15,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                  "Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "application/json",
+                }
+            )
+            print(f"    [cryptocurrency.cv] HTTP {resp.status_code}")
+            resp.raise_for_status()
+            data = resp.json()
+            articles = data.get("articles", data.get("data", []))
+            for item in articles[: self.max_per_source]:
+                title = item.get("title", "")
+                pub_str = item.get("pubDate", item.get("published_at", item.get("date", "")))
+                pub = self._parse_time(pub_str)
+                if title and self._is_recent(pub):
+                    results.append({
+                        "title": title,
+                        "source": item.get("source", "cryptocurrency.cv"),
+                        "published": pub,
+                        "url": item.get("link", item.get("url", "")),
+                    })
+        except Exception as e:
+            print(f"    [cryptocurrency.cv] 失败: {str(e)[:80]}")
         print(f"    [cryptocurrency.cv] {len(results)} 条")
         return results
 
-    # ---------- 源3: CoinGecko News ----------
-    def fetch_coingecko(self, symbol):
-        """从 CoinGecko 获取新闻（免费端点，无需API Key）"""
-        url = "https://api.coingecko.com/api/v3/news"
-        try:
-            resp = requests.get(url, timeout=15,
-                                headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            data = resp.json()
-            articles = data.get("data", data if isinstance(data, list) else [])
-            results = []
-            for item in articles[: self.max_per_source]:
-                title = item.get("title", "")
-                pub = self._parse_time(item.get("created_at", ""))
-                if title and self._is_recent(pub):
-                    results.append({
-                        "title": title,
-                        "source": "CoinGecko",
-                        "published": pub,
-                        "url": item.get("url", ""),
-                    })
-            print(f"    [CoinGecko] {len(results)} 条")
-            return results
-        except Exception as e:
-            print(f"    [CoinGecko] 失败: {str(e)[:80]}")
-            return []
-
-    # ---------- 源4: CryptoControl Public API ----------
-    def fetch_cryptocontrol(self, symbol):
-        """从 CryptoControl 公共 API 获取新闻（免费，无需API Key）"""
-        base = symbol.replace("USDC", "").replace("USDT", "").upper().lower()
-        url = "https://cryptocontrol.io/api/v1/public/news/coin/" + base
-        try:
-            resp = requests.get(url, timeout=15,
-                                headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            articles = resp.json()
-            if not isinstance(articles, list):
-                articles = []
-            results = []
-            for item in articles[: self.max_per_source]:
-                title = item.get("title", "")
-                pub = self._parse_time(item.get("publishedAt", ""))
-                if title and self._is_recent(pub):
-                    results.append({
-                        "title": title,
-                        "source": "CryptoControl",
-                        "published": pub,
-                        "url": item.get("url", ""),
-                    })
-            print(f"    [CryptoControl] {len(results)} 条")
-            return results
-        except Exception as e:
-            print(f"    [CryptoControl] 失败: {str(e)[:80]}")
-            return []
-
-    # ---------- 源5-14: RSS 源 ----------
+    # ---------- 源2-11: RSS 源 ----------
     def fetch_rss(self, symbol):
-        """从多个 RSS 源获取新闻"""
         results = []
         for name, feed_url in self.RSS_FEEDS.items():
             try:
                 resp = requests.get(
-                    feed_url,
-                    timeout=15,
+                    feed_url, timeout=15,
                     headers={
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                                       "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -250,16 +152,11 @@ class NewsAggregator:
 
     # ---------- 聚合入口 ----------
     def aggregate(self, symbol):
-        """从所有源抓取新闻，去重后返回统一列表"""
         print(f"  📡 从多个来源抓取 {symbol} 新闻...")
         all_news = []
-        all_news.extend(self.fetch_newsapi(symbol))
         all_news.extend(self.fetch_crypto_cv(symbol))
-        all_news.extend(self.fetch_coingecko(symbol))
-        all_news.extend(self.fetch_cryptocontrol(symbol))
         all_news.extend(self.fetch_rss(symbol))
 
-        # 按标题去重
         seen = set()
         unique_news = []
         for news in all_news:
