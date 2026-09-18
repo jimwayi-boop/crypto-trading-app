@@ -1,6 +1,5 @@
 """
 多源新闻情绪 + Polymarket预测市场 + 技术指标复合策略
-使用免费新闻源：cryptocurrency.cv API + 多个RSS源 + Polymarket Gamma API
 """
 
 import re
@@ -19,28 +18,24 @@ class NewsAggregator:
         "CoinTelegraph": "https://cointelegraph.com/rss",
         "Decrypt": "https://decrypt.co/feed",
         "CryptoSlate": "https://cryptoslate.com/feed/",
-        "CryptoPotato": "https://cryptopotato.com/feed/",
-        "NewsBTC": "https://www.newsbtc.com/feed/",
-        "Bitcoinist": "https://bitcoinist.com/feed/",
         "CryptoNews": "https://cryptonews.com/news/feed/",
         "CoinGape": "https://coingape.com/feed/",
-        "BeInCrypto": "https://beincrypto.com/feed/",
         "AMBCrypto": "https://ambcrypto.com/feed/",
         "TheDefiant": "https://thedefiant.io/feed/",
         "CryptoBriefing": "https://cryptobriefing.com/feed/",
+        "Bitcoinist": "https://bitcoinist.com/feed/",
+        "CryptoPotato": "https://cryptopotato.com/feed/",
     }
 
     def __init__(self, lookback_hours=72, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
 
-    # ---------- 工具函数 ----------
     @staticmethod
     def _now_utc():
         return datetime.now(timezone.utc).replace(tzinfo=None)
 
     def _parse_time(self, time_str):
-        """尝试多种格式解析时间字符串，统一转为 UTC naive datetime"""
         if not time_str:
             return self._now_utc()
         formats = [
@@ -63,25 +58,18 @@ class NewsAggregator:
         return self._now_utc()
 
     def _is_recent(self, dt):
-        """检查新闻是否在回看窗口内"""
         return dt >= self._now_utc() - timedelta(hours=self.lookback_hours)
 
-    # ---------- 源1: cryptocurrency.cv API ----------
     def fetch_crypto_cv(self, symbol):
-        """从 cryptocurrency.cv 获取新闻（免费，无需API Key）"""
         results = []
-        # 尝试多个可能的端点
         endpoints = [
             ("https://cryptocurrency.cv/api/news", {"limit": self.max_per_source}),
             ("https://cryptocurrency.cv/api/articles", {"limit": self.max_per_source}),
-            ("https://cryptocurrency.cv/api/bitcoin", {"limit": self.max_per_source}),
         ]
         for url, params in endpoints:
             try:
-                resp = requests.get(
-                    url, params=params, timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0"}
-                )
+                resp = requests.get(url, params=params, timeout=15,
+                                    headers={"User-Agent": "Mozilla/5.0"})
                 if resp.status_code != 200:
                     continue
                 data = resp.json()
@@ -104,9 +92,7 @@ class NewsAggregator:
         print(f"    [cryptocurrency.cv] {len(results)} 条")
         return results
 
-    # ---------- 源2-13: RSS 源 ----------
     def fetch_rss(self, symbol):
-        """从多个 RSS 源获取新闻"""
         results = []
         for name, feed_url in self.RSS_FEEDS.items():
             try:
@@ -124,12 +110,10 @@ class NewsAggregator:
                 root = ET.fromstring(resp.content)
                 items = root.findall(".//item")
                 if not items:
-                    # 有些 RSS 使用 Atom 格式
                     items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
 
                 count = 0
                 for item in items[: self.max_per_source]:
-                    # 兼容 RSS 和 Atom
                     title_el = item.find("title")
                     if title_el is None:
                         title_el = item.find("{http://www.w3.org/2005/Atom}title")
@@ -167,15 +151,12 @@ class NewsAggregator:
                 print(f"    [{name}] 失败: {str(e)[:80]}")
         return results
 
-    # ---------- 聚合入口 ----------
     def aggregate(self, symbol):
-        """从所有源抓取新闻，去重后返回统一列表"""
         print(f"  📡 从多个来源抓取 {symbol} 新闻...")
         all_news = []
         all_news.extend(self.fetch_crypto_cv(symbol))
         all_news.extend(self.fetch_rss(symbol))
 
-        # 按标题去重
         seen = set()
         unique_news = []
         for news in all_news:
@@ -195,57 +176,82 @@ class PolymarketSentiment:
         self.gamma_url = "https://gamma-api.polymarket.com"
         self.timeout = timeout
 
-    def fetch_crypto_market_sentiment(self, symbol="BTC"):
-        """获取与加密货币相关的预测市场情绪"""
+    def _fetch_markets(self, params):
         try:
-            # 获取活跃市场
             resp = requests.get(
                 f"{self.gamma_url}/markets",
-                params={"closed": "false", "limit": 50},
+                params=params,
                 timeout=self.timeout,
                 headers={"User-Agent": "Mozilla/5.0"}
             )
             resp.raise_for_status()
-            markets = resp.json()
-
-            scores = []
-            for market in markets:
-                question = market.get("question", "").lower()
-                # 过滤与 BTC/Bitcoin 相关的市场
-                if symbol.lower() in question or "bitcoin" in question:
-                    # 获取市场当前价格（概率）
-                    # Polymarket 市场中，价格 0-1 代表概率
-                    price = market.get("lastTradePrice") or market.get("bestBid") or market.get("bestAsk")
-                    if price is not None:
-                        try:
-                            prob = float(price)
-                            # 将概率转换为情绪分
-                            if prob > 0.6:
-                                scores.append(0.5)
-                            elif prob < 0.4:
-                                scores.append(-0.5)
-                            else:
-                                scores.append(0.0)
-                        except (ValueError, TypeError):
-                            continue
-
-            if scores:
-                avg = float(np.mean(scores))
-                print(f"    [Polymarket] 分析 {len(scores)} 个相关市场，情绪分: {avg:+.3f}")
-                return avg
-            else:
-                print("    [Polymarket] 未找到相关市场")
-                return 0.0
-
+            return resp.json()
         except Exception as e:
-            print(f"    [Polymarket] 失败: {str(e)[:80]}")
+            print(f"    [Polymarket] 请求失败: {str(e)[:80]}")
+            return []
+
+    def fetch_crypto_market_sentiment(self, symbol="BTC"):
+        base = symbol.replace("USDC", "").replace("USDT", "").upper()
+        keywords = [base.lower(), "bitcoin", "btc", "crypto", "cryptocurrency"]
+
+        all_markets = []
+
+        # 策略1：按 tag 获取加密货币市场
+        markets = self._fetch_markets({"closed": "false", "limit": 100, "tag": "crypto"})
+        if markets:
+            all_markets.extend(markets)
+
+        # 策略2：无 tag 获取大量活跃市场
+        if not all_markets:
+            markets = self._fetch_markets({"closed": "false", "limit": 100})
+            all_markets.extend(markets)
+
+        if not all_markets:
+            print("    [Polymarket] 未获取到任何市场数据")
+            return 0.0
+
+        relevant = []
+        for market in all_markets:
+            question = market.get("question", "").lower()
+            if any(kw in question for kw in keywords):
+                relevant.append(market)
+
+        if not relevant:
+            print(f"    [Polymarket] 在 {len(all_markets)} 个市场中未找到与 {base} 相关的市场")
+            return 0.0
+
+        scores = []
+        for market in relevant[:10]:
+            price = (
+                market.get("lastTradePrice")
+                or market.get("bestBid")
+                or market.get("bestAsk")
+                or market.get("outcomePrices", [None])[0]
+            )
+            if price is None:
+                continue
+            try:
+                prob = float(price)
+                if prob > 0.6:
+                    scores.append(0.5)
+                elif prob < 0.4:
+                    scores.append(-0.5)
+                else:
+                    scores.append(0.0)
+            except (ValueError, TypeError):
+                continue
+
+        if scores:
+            avg = float(np.mean(scores))
+            print(f"    [Polymarket] 分析 {len(scores)} 个相关市场，情绪分: {avg:+.3f}")
+            return avg
+        else:
+            print(f"    [Polymarket] 找到 {len(relevant)} 个相关市场，但无有效价格数据")
             return 0.0
 
 
 class NewsSentimentStrategy:
-    """
-    多源新闻情绪 + Polymarket预测市场 + 技术指标复合策略
-    """
+    """多源新闻情绪 + Polymarket预测市场 + 技术指标复合策略"""
 
     def __init__(self,
                  fast_ema=20,
@@ -265,10 +271,9 @@ class NewsSentimentStrategy:
         )
         self.analyzer = SentimentIntensityAnalyzer()
         self.polymarket = PolymarketSentiment()
-        self.polymarket_weight = polymarket_weight  # Polymarket 情绪在综合分中的权重
+        self.polymarket_weight = polymarket_weight
 
     def analyze_news_sentiment(self, news_list):
-        """对新闻标题做 VADER 情绪打分"""
         if not news_list:
             return 0.0, 0, 0, 0
         scores = []
@@ -302,16 +307,13 @@ class NewsSentimentStrategy:
         df = self.compute_technical(df)
         df["signal"] = 0
 
-        # 新闻情绪
         news_list = self.aggregator.aggregate(symbol)
         news_sentiment, pos, neg, neu = self.analyze_news_sentiment(news_list)
 
-        # Polymarket 情绪
         polymarket_sentiment = self.polymarket.fetch_crypto_market_sentiment(
             symbol.replace("USDC", "").replace("USDT", "")
         )
 
-        # 综合情绪分（加权平均）
         combined_sentiment = (
             (1 - self.polymarket_weight) * news_sentiment
             + self.polymarket_weight * polymarket_sentiment
