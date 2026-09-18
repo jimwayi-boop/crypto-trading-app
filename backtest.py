@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 
 def run_backtest(df, strategy, initial_capital=500,
-                 fee_rate=0.001, slippage=0.0005):
+                 fee_rate=0, slippage=0.0005):
     df = strategy.generate_signals(df)
     capital = initial_capital
     position = 0
