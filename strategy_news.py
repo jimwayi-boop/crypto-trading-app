@@ -17,18 +17,18 @@ class NewsAggregator:
 
     RSS_FEEDS = {
         "CoinTelegraph": "https://cointelegraph.com/rss",
-        "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/?outputType=xml",
         "Decrypt": "https://decrypt.co/feed",
-        "BitcoinMagazine": "https://bitcoinmagazine.com/feed",
         "CryptoSlate": "https://cryptoslate.com/feed/",
         "CryptoPotato": "https://cryptopotato.com/feed/",
         "NewsBTC": "https://www.newsbtc.com/feed/",
         "Bitcoinist": "https://bitcoinist.com/feed/",
         "CryptoNews": "https://cryptonews.com/news/feed/",
-        "TheBlock": "https://www.theblock.co/rss.xml",
+        "CoinGape": "https://coingape.com/feed/",
+        "BeInCrypto": "https://beincrypto.com/feed/",
+        "AMBCrypto": "https://ambcrypto.com/feed/",
     }
 
-    def __init__(self, lookback_hours=12, max_per_source=30):
+    def __init__(self, lookback_hours=48, max_per_source=30):
         self.lookback_hours = lookback_hours
         self.max_per_source = max_per_source
 
@@ -67,31 +67,39 @@ class NewsAggregator:
     # ---------- 源1: cryptocurrency.cv API ----------
     def fetch_crypto_cv(self, symbol):
         """从 cryptocurrency.cv 获取新闻（免费，无需API Key）"""
-        try:
-            url = "https://cryptocurrency.cv/api/news"
-            params = {"limit": self.max_per_source}
-            resp = requests.get(url, params=params, timeout=15,
-                                headers={"User-Agent": "Mozilla/5.0"})
-            resp.raise_for_status()
-            data = resp.json()
-            articles = data.get("articles", [])
-            results = []
-            for item in articles[: self.max_per_source]:
-                title = item.get("title", "")
-                pub_str = item.get("pubDate", "")
-                pub = self._parse_time(pub_str)
-                if title and self._is_recent(pub):
-                    results.append({
-                        "title": title,
-                        "source": item.get("source", "cryptocurrency.cv"),
-                        "published": pub,
-                        "url": item.get("link", ""),
-                    })
-            print(f"    [cryptocurrency.cv] {len(results)} 条")
-            return results
-        except Exception as e:
-            print(f"    [cryptocurrency.cv] 失败: {e}")
-            return []
+        results = []
+        # 尝试多个可能的端点
+        endpoints = [
+            ("https://cryptocurrency.cv/api/news", {"limit": self.max_per_source}),
+            ("https://cryptocurrency.cv/api/articles", {"limit": self.max_per_source}),
+        ]
+        for url, params in endpoints:
+            try:
+                resp = requests.get(
+                    url, params=params, timeout=15,
+                    headers={"User-Agent": "Mozilla/5.0"}
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                articles = data.get("articles", data.get("data", data if isinstance(data, list) else []))
+                for item in articles[: self.max_per_source]:
+                    title = item.get("title", "")
+                    pub_str = item.get("pubDate", item.get("published_at", item.get("date", "")))
+                    pub = self._parse_time(pub_str)
+                    if title and self._is_recent(pub):
+                        results.append({
+                            "title": title,
+                            "source": item.get("source", "cryptocurrency.cv"),
+                            "published": pub,
+                            "url": item.get("link", item.get("url", "")),
+                        })
+                if results:
+                    break
+            except Exception:
+                continue
+        print(f"    [cryptocurrency.cv] {len(results)} 条")
+        return results
 
     # ---------- 源2-11: RSS 源 ----------
     def fetch_rss(self, symbol):
@@ -102,32 +110,58 @@ class NewsAggregator:
                 resp = requests.get(
                     feed_url,
                     timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0 (compatible; CryptoBot/1.0)"}
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                      "Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "application/rss+xml,application/xml,text/xml,*/*",
+                    }
                 )
                 resp.raise_for_status()
                 root = ET.fromstring(resp.content)
                 items = root.findall(".//item")
+                if not items:
+                    # 有些 RSS 使用 Atom 格式
+                    items = root.findall(".//{http://www.w3.org/2005/Atom}entry")
+
                 count = 0
                 for item in items[: self.max_per_source]:
+                    # 兼容 RSS 和 Atom
                     title_el = item.find("title")
+                    if title_el is None:
+                        title_el = item.find("{http://www.w3.org/2005/Atom}title")
                     pub_el = item.find("pubDate")
+                    if pub_el is None:
+                        pub_el = item.find("{http://www.w3.org/2005/Atom}published")
+                    if pub_el is None:
+                        pub_el = item.find("{http://www.w3.org/2005/Atom}updated")
                     link_el = item.find("link")
+                    if link_el is None:
+                        link_el = item.find("{http://www.w3.org/2005/Atom}link")
+
                     title = title_el.text if title_el is not None else ""
                     if not title:
                         continue
-                    pub = self._parse_time(pub_el.text if pub_el is not None else "")
+
+                    pub_text = pub_el.text if pub_el is not None else ""
+                    pub = self._parse_time(pub_text)
                     if not self._is_recent(pub):
                         continue
+
+                    link = ""
+                    if link_el is not None:
+                        link = link_el.text if link_el.text else link_el.get("href", "")
+
                     results.append({
                         "title": title,
                         "source": name,
                         "published": pub,
-                        "url": link_el.text if link_el is not None else "",
+                        "url": link,
                     })
                     count += 1
                 print(f"    [{name}] {count} 条")
             except Exception as e:
-                print(f"    [{name}] 失败: {e}")
+                print(f"    [{name}] 失败: {str(e)[:80]}")
         return results
 
     # ---------- 聚合入口 ----------
@@ -161,7 +195,7 @@ class NewsSentimentStrategy:
                  slow_ema=50,
                  lookback=20,
                  sentiment_threshold=0.3,
-                 news_lookback_hours=12,
+                 news_lookback_hours=48,
                  max_news_per_source=30):
         self.fast_ema = fast_ema
         self.slow_ema = slow_ema
