@@ -3,6 +3,7 @@ import ccxt
 import pandas as pd
 import requests
 import json
+from strategy import MomentumBreakoutStrategy
 from strategy_news import NewsSentimentStrategy
 from backtest import run_backtest
 
@@ -21,7 +22,7 @@ st.sidebar.header("设置")
 symbol = st.sidebar.selectbox("交易对", ["BTCUSDC", "ETHUSDC", "SOLUSDC"])
 timeframe = st.sidebar.selectbox("K线周期", ["1h", "4h", "1d"])
 capital = st.sidebar.number_input("回测初始资金 ($)", value=500)
-mode = st.sidebar.radio("模式", ["回测", "纸面交易监控"])
+mode = st.sidebar.radio("模式", ["纸面交易监控", "回测"])
 
 
 # ==================== 数据获取 ====================
@@ -48,7 +49,6 @@ def fetch_ohlcv(symbol, timeframe, limit=100):
 
 @st.cache_data(ttl=60)
 def fetch_paper_state():
-    """从 GitHub 读取 paper_state.json"""
     try:
         resp = requests.get(PAPER_STATE_URL, timeout=10)
         if resp.status_code == 200:
@@ -60,8 +60,11 @@ def fetch_paper_state():
 
 # ==================== 回测模式 ====================
 if mode == "回测":
+    st.subheader("📊 策略回测")
+    st.caption("回测使用纯技术策略（MomentumBreakoutStrategy），因为新闻情绪无法做历史回测。")
+
     df = fetch_ohlcv(symbol, timeframe)
-    strategy = NewsSentimentStrategy()
+    strategy = MomentumBreakoutStrategy()
     results = run_backtest(df, strategy, initial_capital=capital)
 
     col1, col2, col3, col4 = st.columns(4)
@@ -93,7 +96,6 @@ elif mode == "纸面交易监控":
             "请确认文件已上传到 GitHub 仓库，且仓库是公开的。"
         )
     else:
-        # 计算当前组合总值（使用最新价格）
         try:
             df_now = fetch_ohlcv(symbol, "1h", limit=5)
             current_price = df_now["close"].iloc[-1]
@@ -106,24 +108,14 @@ elif mode == "纸面交易监控":
         pnl_pct = (portfolio_value / INITIAL_CAPITAL - 1) * 100
         total_pnl = portfolio_value - INITIAL_CAPITAL
 
-        # 顶部指标
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("虚拟现金", f"${cash:.2f}")
         col2.metric("持仓数量", f"{position:.6f} BTC")
-        col3.metric(
-            "组合总值",
-            f"${portfolio_value:.2f}",
-            delta=f"{pnl_pct:+.2f}%",
-        )
-        col4.metric(
-            "总盈亏",
-            f"${total_pnl:+.2f}",
-            delta=f"{pnl_pct:+.2f}%",
-        )
+        col3.metric("组合总值", f"${portfolio_value:.2f}", delta=f"{pnl_pct:+.2f}%")
+        col4.metric("总盈亏", f"${total_pnl:+.2f}", delta=f"{pnl_pct:+.2f}%")
 
         st.divider()
 
-        # 当前持仓详情
         st.subheader("💼 当前持仓")
         if position > 0:
             entry_price = state.get("entry_price", 0)
@@ -137,24 +129,18 @@ elif mode == "纸面交易监控":
             c1.metric("入场价", f"${entry_price:.2f}")
             c2.metric("当前价", f"${current_price:.2f}")
             c3.metric("持仓市值", f"${position_value:.2f}")
-            c4.metric(
-                "未实现盈亏",
-                f"${unrealized_pnl:+.2f}",
-                delta=f"{unrealized_pct:+.2f}%",
-            )
+            c4.metric("未实现盈亏", f"${unrealized_pnl:+.2f}", delta=f"{unrealized_pct:+.2f}%")
         else:
             st.info("当前无持仓，等待买入信号。")
 
         st.divider()
 
-        # 交易历史
         st.subheader("📜 交易历史")
         trades = state.get("trades", [])
         if not trades:
             st.info("暂无交易记录。")
         else:
             trades_df = pd.DataFrame(trades)
-            # 重新排列列顺序
             if "type" in trades_df.columns:
                 cols_order = [
                     c
@@ -168,7 +154,6 @@ elif mode == "纸面交易监控":
                 trades_df = trades_df[cols_order]
             st.dataframe(trades_df, use_container_width=True)
 
-            # 统计
             st.subheader("📈 交易统计")
             buy_trades = [t for t in trades if t.get("type") == "BUY"]
             sell_trades = [t for t in trades if t.get("type") == "SELL"]
@@ -184,14 +169,10 @@ elif mode == "纸面交易监控":
                 s1.metric("买入次数", len(buy_trades))
                 s2.metric("卖出次数", len(sell_trades))
                 s3.metric("胜率", f"{win_rate:.1f}%")
-                s4.metric(
-                    "已实现盈亏",
-                    f"${sum(pnls):+.2f}",
-                )
+                s4.metric("已实现盈亏", f"${sum(pnls):+.2f}")
 
         st.divider()
 
-        # 状态元信息
         st.caption(
             f"创建时间: {state.get('created', 'N/A')} | "
             f"最后更新: {state.get('last_updated', 'N/A')}"
